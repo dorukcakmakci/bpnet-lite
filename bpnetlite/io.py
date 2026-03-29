@@ -91,12 +91,12 @@ class PeakNegativeSampler(torch.utils.data.Dataset):
 		reverse_complement=False, shuffle=True, random_state=None):
 		self.peak_sequences = peak_sequences.numpy(force=True)
 		self.peak_signals = peak_signals.numpy(force=True)
-		self.peak_controls = peak_controls.numpy(force=True)
+		self.peak_controls = None if peak_controls is None else peak_controls.numpy(force=True)
 		self.n_peaks = len(self.peak_sequences)
 		
 		self.negative_sequences = negative_sequences.numpy(force=True)
 		self.negative_signals = negative_signals.numpy(force=True)
-		self.negative_controls = negative_controls.numpy(force=True)
+		self.negative_controls = None if negative_controls is None else negative_controls.numpy(force=True)
 		self.n_negatives = len(self.negative_sequences)
 
 		self.negative_ratio = negative_ratio
@@ -256,7 +256,117 @@ class DataGenerator(torch.utils.data.Dataset):
 		if self.controls is not None:
 			return X, X_ctl, y
 
-		return X, y
+			return X, y
+
+
+class LabelledDataGenerator(DataGenerator):
+	"""A DataGenerator variant that returns a positive class label.
+
+	This class is intended for training procedures that re-use BPNet's mixture
+	loss implementation while training on a single set of loci. Every example is
+	tagged with label 1.
+	"""
+
+	def __getitem__(self, idx):
+		output = super().__getitem__(idx)
+		if len(output) == 3:
+			X, X_ctl, y = output
+			return X, X_ctl, y, 1
+
+		X, y = output
+		return X, y, 1
+
+
+def sum_center_counts(y, out_window=1000, max_jitter=0):
+	"""Sum signal counts over the center output window.
+
+	When max_jitter > 0, y includes flanks of length max_jitter on both sides.
+	This function trims those flanks before summing counts.
+	"""
+	if max_jitter > 0:
+		start = max_jitter
+		end = start + out_window
+		y = y[:, :, start:end]
+
+	return y.sum(dim=(1, 2))
+
+
+def make_labelled_loci_loader(sequences, signals, controls=None, in_window=2114,
+	out_window=1000, max_jitter=128, reverse_complement=True, random_state=None,
+	pin_memory=True, num_workers=0, batch_size=32):
+	"""Wrap extracted loci tensors in a labelled DataLoader."""
+	X_gen = LabelledDataGenerator(
+		sequences=sequences,
+		signals=signals,
+		controls=controls,
+		in_window=in_window,
+		out_window=out_window,
+		max_jitter=max_jitter,
+		reverse_complement=reverse_complement,
+		random_state=random_state
+	)
+
+	X_gen = torch.utils.data.DataLoader(X_gen, pin_memory=pin_memory,
+		num_workers=num_workers, batch_size=batch_size)
+	return X_gen
+
+
+def filter_nonpeaks_by_peak_quantile(peaks, nonpeaks, sequences, signals,
+	controls=None, chroms=None, in_window=2114, out_window=1000,
+	max_jitter=128, nonpeak_quantile=0.01, threshold=None, min_counts=None,
+	max_counts=None, peak_summits=False, exclusion_lists=None, verbose=False):
+	"""Filter nonpeaks by a threshold from peak count quantiles.
+
+	If `threshold` is None, the threshold is computed from `peaks` at
+	`nonpeak_quantile`. If `threshold` is provided, `peaks` is ignored.
+	"""
+
+	if threshold is None:
+		if peaks is None:
+			raise ValueError("`peaks` must be provided when `threshold` is None.")
+		if nonpeak_quantile <= 0 or nonpeak_quantile >= 1:
+			raise ValueError("`nonpeak_quantile` must be in (0, 1).")
+
+		X_peaks = extract_loci(loci=peaks, sequences=sequences,
+			signals=signals, in_signals=controls, chroms=chroms, in_window=in_window,
+			out_window=out_window, max_jitter=0, min_counts=min_counts,
+			max_counts=max_counts, summits=peak_summits,
+			exclusion_lists=exclusion_lists,
+			ignore=list('QWERYUIOPSDFHJKLZXVBNM'), return_mask=True,
+			verbose=verbose)
+
+		peak_signals = X_peaks[1]
+		peak_counts = peak_signals.sum(dim=(1, 2))
+		if peak_counts.shape[0] == 0:
+			raise ValueError("No peaks were available to compute quantile threshold.")
+
+		threshold = torch.quantile(peak_counts, nonpeak_quantile).item()
+
+	X_nonpeaks = extract_loci(loci=nonpeaks, sequences=sequences,
+		signals=signals, in_signals=controls, chroms=chroms, in_window=in_window,
+		out_window=out_window, max_jitter=max_jitter, min_counts=min_counts,
+		max_counts=max_counts, summits=False, exclusion_lists=exclusion_lists,
+		ignore=list('QWERYUIOPSDFHJKLZXVBNM'), return_mask=True, verbose=verbose)
+
+	if controls is None:
+		nonpeak_sequences, nonpeak_signals = X_nonpeaks[0], X_nonpeaks[1]
+		nonpeak_controls = None
+	else:
+		nonpeak_sequences, nonpeak_signals, nonpeak_controls = X_nonpeaks[:3]
+
+	nonpeak_counts = sum_center_counts(nonpeak_signals, out_window=out_window,
+		max_jitter=max_jitter)
+	keep = nonpeak_counts < threshold
+
+	return {
+		'threshold': threshold,
+		'keep': keep,
+		'n_kept': int(keep.sum().item()),
+		'n_total': int(keep.shape[0]),
+		'sequences': nonpeak_sequences[keep],
+		'signals': nonpeak_signals[keep],
+		'controls': None if nonpeak_controls is None else nonpeak_controls[keep]
+	}
 
 
 def PeakGenerator(peaks, negatives, sequences, signals, controls=None,
