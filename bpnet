@@ -14,8 +14,9 @@ desc = """BPNet is an neural network primarily composed of dilated residual
 	files for the signal to predict and the control signal, and train a
 	BPNet model for you."""
 
-_help = """Must be either 'negatives', 'fit', 'predict', 'evaluate', 
-	'attribute', 'seqlets', 'marginalize', or 'pipeline'."""
+_help = """Must be either 'negatives', 'pipeline-json', 'fit',
+	'fit-factorized', 'fit-fourier-without-count', 'predict', 'evaluate', 'attribute', 'seqlets',
+	'marginalize', or 'pipeline'."""
 
 
 # Read in the arguments
@@ -74,6 +75,27 @@ json_parser.add_argument("-o", "--output", type=str,
 
 fit_parser = subparsers.add_parser("fit", help="Fit a BPNet model.")
 fit_parser.add_argument("-p", "--parameters", type=str, required=True,
+	help="A JSON file containing the parameters for fitting the model.")
+
+#
+
+fit_factorized_parser = subparsers.add_parser("fit-factorized",
+	help="Fit a BPNet model with a frozen bias model and trainable residual.")
+fit_factorized_parser.add_argument("-p", "--parameters", type=str, required=True,
+	help="A JSON file containing the parameters for fitting the model.")
+
+#
+
+fit_fourier_parser = subparsers.add_parser("fit-fourier-without-count",
+	help="Fit a BPNet model with MNLL + Fourier attribution prior (no count-head loss term).")
+fit_fourier_parser.add_argument("-p", "--parameters", type=str, required=True,
+	help="A JSON file containing the parameters for fitting the model.")
+
+#
+
+fit_low_res_parser = subparsers.add_parser("fit-low-res",
+	help="Fit a BPNet model with CoarseMNLL loss for low-resolution training.")
+fit_low_res_parser.add_argument("-p", "--parameters", type=str, required=True,
 	help="A JSON file containing the parameters for fitting the model.")
 
 #
@@ -152,6 +174,124 @@ default_fit_parameters = {
 	'scheduler': True,
 	'early_stopping': 10,
 	'verbose': False,
+
+	'min_counts': 0,
+	'max_counts': 99999999,
+
+	'training_chroms': training_chroms,
+	'validation_chroms': validation_chroms,
+	'sequences': None,
+	'loci': None,
+	'negatives': None,
+	'signals': None,
+	'controls': None,
+	'random_state': None,
+	'performance_filename': 'performance.tsv'
+}
+
+default_fit_factorized_parameters = {
+	'n_filters': 64,
+	'n_layers': 8,
+	'profile_output_bias': True,
+	'count_output_bias': True,
+	'name': None,
+	'batch_size': 64,
+	'in_window': 2114,
+	'out_window': 1000,
+	'max_jitter': 128,
+	'reverse_complement': True,
+	'reverse_complement_average': True,
+	'summits': False,
+	'max_epochs': 50,
+	'lr': 0.001,
+	'negative_ratio': 0.333,
+	'count_loss_weight': None,
+	'dtype': 'float32',
+	'device': 'cuda',
+	'scheduler': True,
+	'early_stopping': 10,
+	'verbose': False,
+
+	'min_counts': 0,
+	'max_counts': 99999999,
+
+	'training_chroms': training_chroms,
+	'validation_chroms': validation_chroms,
+	'sequences': None,
+	'loci': None,
+	'negatives': None,
+	'signals': None,
+	'controls': None,
+	'frozen_bias_model': None,
+	'random_state': None,
+	'performance_filename': 'performance.tsv'
+}
+
+default_fit_fourier_without_count_parameters = {
+	'n_filters': 64,
+	'n_layers': 8,
+	'profile_output_bias': True,
+	'count_output_bias': True,
+	'name': None,
+	'batch_size': 64,
+	'in_window': 2114,
+	'out_window': 1000,
+	'max_jitter': 128,
+	'reverse_complement': True,
+	'reverse_complement_average': True,
+	'summits': False,
+	'max_epochs': 50,
+	'lr': 0.001,
+	'negative_ratio': 0.333,
+	'count_loss_weight': None,
+	'dtype': 'float32',
+	'device': 'cuda',
+	'scheduler': True,
+	'early_stopping': 10,
+	'verbose': False,
+
+	'fourier_loss_weight': 50.0,
+	'fourier_freq_limit': 200,
+	'fourier_limit_softness': 0.2,
+	'fourier_smooth_sigma': 3,
+
+	'min_counts': 0,
+	'max_counts': 99999999,
+
+	'training_chroms': training_chroms,
+	'validation_chroms': validation_chroms,
+	'sequences': None,
+	'loci': None,
+	'negatives': None,
+	'signals': None,
+	'controls': None,
+	'random_state': None,
+	'performance_filename': 'performance.tsv'
+}
+
+default_fit_low_res_parameters = {
+	'n_filters': 64,
+	'n_layers': 8,
+	'profile_output_bias': True,
+	'count_output_bias': True,
+	'name': None,
+	'batch_size': 64,
+	'in_window': 2114,
+	'out_window': 1000,
+	'max_jitter': 128,
+	'reverse_complement': True,
+	'reverse_complement_average': True,
+	'summits': False,
+	'max_epochs': 50,
+	'lr': 0.001,
+	'negative_ratio': 0.333,
+	'dtype': 'float32',
+	'device': 'cuda',
+	'scheduler': True,
+	'early_stopping': 10,
+	'verbose': False,
+
+	'coarse_bin_size': 20,
 
 	'min_counts': 0,
 	'max_counts': 99999999,
@@ -558,7 +698,6 @@ from tangermeme.io import extract_loci
 from tangermeme.utils import example_to_fasta_coords
 from tangermeme.seqlet import recursive_seqlets
 
-
 ##########
 # FIT
 ##########
@@ -683,6 +822,374 @@ if args.cmd == "fit":
 	with open(fname, "w") as outfile:
 		outfile.write(json.dumps(evaluate_parameters, sort_keys=True, indent=4))
 	
+	os.system("bpnet evaluate -p {}".format(fname))
+
+
+##########
+# FIT-FACTORIZED
+##########
+
+
+elif args.cmd == "fit-factorized":
+	from bpnetlite.bias_factorized_bpnet import BiasFactorizedBPNet
+
+	parameters = merge_parameters(args.parameters, default_fit_factorized_parameters)
+
+	if parameters['verbose']:
+		print("Training Chroms: ", parameters['training_chroms'])
+		print("Vaidation Chroms: ", parameters['validation_chroms'])
+		print("\nLoading peaks from: ", parameters['loci'])
+		print("Loading negatives from: ", parameters['negatives'])
+		print("Loading frozen bias model from: ", parameters['frozen_bias_model'], "\n")
+
+	training_data = PeakGenerator(
+		peaks=parameters['loci'],
+		negatives=parameters['negatives'],
+		sequences=parameters['sequences'],
+		signals=parameters['signals'],
+		controls=parameters['controls'],
+		chroms=parameters['training_chroms'],
+		in_window=parameters['in_window'],
+		out_window=parameters['out_window'],
+		max_jitter=parameters['max_jitter'],
+		negative_ratio=parameters['negative_ratio'],
+		reverse_complement=parameters['reverse_complement'],
+		min_counts=parameters['min_counts'],
+		max_counts=parameters['max_counts'],
+		summits=parameters['summits'],
+		exclusion_lists=parameters['exclusion_lists'],
+		random_state=parameters['random_state'],
+		batch_size=parameters['batch_size'],
+		verbose=parameters['verbose']
+	)
+
+	valid_data = extract_loci(
+		sequences=parameters['sequences'],
+		signals=parameters['signals'],
+		in_signals=parameters['controls'],
+		loci=parameters['loci'],
+		chroms=parameters['validation_chroms'],
+		in_window=parameters['in_window'],
+		out_window=parameters['out_window'],
+		max_jitter=0,
+		exclusion_lists=parameters['exclusion_lists'],
+		ignore=list('QWERYUIOPSDFHJKLZXVBNM'),
+		verbose=parameters['verbose']
+	)
+
+	if parameters['verbose']:
+		print("\nTraining Set Peaks: ", training_data.dataset.peak_sequences.shape[0])
+		print("Training Set Negatives: ", training_data.dataset.negative_sequences.shape[0])
+		print("Validation Set Size: ", valid_data[0].shape[0], "\n")
+
+	if parameters['count_loss_weight'] is None:
+		peak_read_count = training_data.dataset.peak_signals.sum(axis=-1)
+		count_loss_weight = peak_read_count.mean(axis=(0, 1)).item()
+		parameters['count_loss_weight'] = count_loss_weight
+
+		if parameters['verbose']:
+			print("Count loss weight set to {:4.4}".format(count_loss_weight))
+			print("Negative Ratio: 1:{:4.4} pos:neg\n".format(
+				parameters['negative_ratio']))
+
+	if parameters['controls'] is not None:
+		valid_sequences, valid_signals, valid_controls = valid_data
+		n_control_tracks = len(parameters['controls'])
+	else:
+		valid_sequences, valid_signals = valid_data
+		valid_controls = None
+		n_control_tracks = 0
+
+	trimming = (parameters['in_window'] - parameters['out_window']) // 2
+
+	# Register LocalErrorModel at the module path pickle expects
+	import types
+	from bpnetlite.critic_distilled_bias_model import LocalErrorModel
+	for mod_path in ['utils', 'utils.debiasing', 'utils.debiasing.TF_ChIP',
+	                 'utils.debiasing.TF_ChIP.critic_distilled_bias',
+	                 'utils.debiasing.TF_ChIP.critic_distilled_bias.bias_model']:
+		if mod_path not in sys.modules:
+			sys.modules[mod_path] = types.ModuleType(mod_path)
+	sys.modules['utils.debiasing.TF_ChIP.critic_distilled_bias.bias_model'].LocalErrorModel = LocalErrorModel
+
+	frozen_bias_model = torch.load(
+		parameters['frozen_bias_model'],
+		weights_only=False
+	).to(parameters['device'])
+	frozen_bias_model.eval()
+	for p in frozen_bias_model.parameters():
+		p.requires_grad = False
+
+	model = BiasFactorizedBPNet(
+		n_filters=parameters['n_filters'],
+		n_layers=parameters['n_layers'],
+		n_outputs=len(parameters['signals']),
+		n_control_tracks=n_control_tracks,
+		profile_output_bias=parameters['profile_output_bias'],
+		count_output_bias=parameters['count_output_bias'],
+		count_loss_weight=parameters['count_loss_weight'],
+		trimming=trimming,
+		name=parameters['name'],
+		verbose=parameters['verbose'],
+		frozen_bias_model=frozen_bias_model,
+	).to(parameters['device'])
+
+	trainable_params = [p for p in model.parameters() if p.requires_grad]
+	if len(trainable_params) == 0:
+		raise ValueError("No trainable parameters found for fit-factorized.")
+	optimizer = torch.optim.Adam(trainable_params, lr=parameters['lr'])
+
+	if parameters['scheduler']:
+		scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5,
+			patience=5, threshold=0.0001, min_lr=0.0001)
+	else:
+		scheduler = None
+
+	model.fit(training_data, optimizer, scheduler,
+		X_valid=valid_sequences,
+		X_ctl_valid=valid_controls, y_valid=valid_signals,
+		max_epochs=parameters['max_epochs'],
+		batch_size=parameters['batch_size'],
+		early_stopping=parameters['early_stopping'],
+		dtype=parameters['dtype'],
+		device=parameters['device'])
+
+	evaluate_parameters = parameters.copy()
+	evaluate_parameters['chroms'] = parameters['validation_chroms']
+	evaluate_parameters['max_jitter'] = 0
+	evaluate_parameters['reverse_complement'] = False
+	evaluate_parameters['model'] = parameters['name'] + '.torch'
+	evaluate_parameters['performance_filename'] = (parameters['name'] +
+		'.performance.tsv')
+
+	fname = "{}.evaluate.json".format(parameters['name'])
+	with open(fname, "w") as outfile:
+		outfile.write(json.dumps(evaluate_parameters, sort_keys=True, indent=4))
+
+	os.system("bpnet evaluate -p {}".format(fname))
+
+
+##########
+# FIT-FOURIER-WITHOUT-COUNT
+##########
+
+
+elif args.cmd == "fit-fourier-without-count":
+	from bpnetlite.bpnet_with_fourier_prior import BPNetWithFourierPrior
+
+	parameters = merge_parameters(args.parameters, default_fit_fourier_without_count_parameters)
+
+	if parameters['verbose']:
+		print("Training Chroms: ", parameters['training_chroms'])
+		print("Vaidation Chroms: ", parameters['validation_chroms'])
+		print("\nLoading peaks from: ", parameters['loci'])
+		print("Loading negatives from: ", parameters['negatives'], "\n")
+
+	training_data = PeakGenerator(
+		peaks=parameters['loci'],
+		negatives=parameters['negatives'],
+		sequences=parameters['sequences'],
+		signals=parameters['signals'],
+		controls=parameters['controls'],
+		chroms=parameters['training_chroms'],
+		in_window=parameters['in_window'],
+		out_window=parameters['out_window'],
+		max_jitter=parameters['max_jitter'],
+		negative_ratio=parameters['negative_ratio'],
+		reverse_complement=parameters['reverse_complement'],
+		min_counts=parameters['min_counts'],
+		max_counts=parameters['max_counts'],
+		summits=parameters['summits'],
+		exclusion_lists=parameters['exclusion_lists'],
+		random_state=parameters['random_state'],
+		batch_size=parameters['batch_size'],
+		verbose=parameters['verbose']
+	)
+
+	valid_data = extract_loci(
+		sequences=parameters['sequences'],
+		signals=parameters['signals'],
+		in_signals=parameters['controls'],
+		loci=parameters['loci'],
+		chroms=parameters['validation_chroms'],
+		in_window=parameters['in_window'],
+		out_window=parameters['out_window'],
+		max_jitter=0,
+		exclusion_lists=parameters['exclusion_lists'],
+		ignore=list('QWERYUIOPSDFHJKLZXVBNM'),
+		verbose=parameters['verbose']
+	)
+
+	if parameters['verbose']:
+		print("\nTraining Set Peaks: ", training_data.dataset.peak_sequences.shape[0])
+		print("Training Set Negatives: ", training_data.dataset.negative_sequences.shape[0])
+		print("Validation Set Size: ", valid_data[0].shape[0], "\n")
+
+	if parameters['controls'] is not None:
+		valid_sequences, valid_signals, valid_controls = valid_data
+		n_control_tracks = len(parameters['controls'])
+	else:
+		valid_sequences, valid_signals = valid_data
+		valid_controls = None
+		n_control_tracks = 0
+
+	trimming = (parameters['in_window'] - parameters['out_window']) // 2
+	count_loss_weight = parameters['count_loss_weight']
+	if count_loss_weight is None:
+		count_loss_weight = 1.0
+
+	model = BPNetWithFourierPrior(
+		n_filters=parameters['n_filters'],
+		n_layers=parameters['n_layers'],
+		n_outputs=len(parameters['signals']),
+		n_control_tracks=n_control_tracks,
+		profile_output_bias=parameters['profile_output_bias'],
+		count_output_bias=parameters['count_output_bias'],
+		count_loss_weight=count_loss_weight,
+		trimming=trimming,
+		name=parameters['name'],
+		verbose=parameters['verbose'],
+		fourier_loss_weight=parameters['fourier_loss_weight'],
+		fourier_freq_limit=parameters['fourier_freq_limit'],
+		fourier_limit_softness=parameters['fourier_limit_softness'],
+		fourier_smooth_sigma=parameters['fourier_smooth_sigma'],
+	).to(parameters['device'])
+
+	optimizer = torch.optim.Adam(model.parameters(), lr=parameters['lr'])
+
+	if parameters['scheduler']:
+		scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5,
+			patience=5, threshold=0.0001, min_lr=0.0001)
+	else:
+		scheduler = None
+
+	model.fit(training_data, optimizer, scheduler,
+		X_valid=valid_sequences,
+		X_ctl_valid=valid_controls, y_valid=valid_signals,
+		max_epochs=parameters['max_epochs'],
+		batch_size=parameters['batch_size'],
+		early_stopping=parameters['early_stopping'],
+		dtype=parameters['dtype'],
+		device=parameters['device'])
+
+	evaluate_parameters = parameters.copy()
+	evaluate_parameters['chroms'] = parameters['validation_chroms']
+	evaluate_parameters['max_jitter'] = 0
+	evaluate_parameters['reverse_complement'] = False
+	evaluate_parameters['model'] = parameters['name'] + '.torch'
+	evaluate_parameters['performance_filename'] = (parameters['name'] +
+		'.performance.tsv')
+
+	fname = "{}.evaluate.json".format(parameters['name'])
+	with open(fname, "w") as outfile:
+		outfile.write(json.dumps(evaluate_parameters, sort_keys=True, indent=4))
+
+	os.system("bpnet evaluate -p {}".format(fname))
+
+
+elif args.cmd == "fit-low-res":
+	from bpnetlite.bpnet_with_coarse_mnll import BPNetWithCoarseMNLL
+
+	parameters = merge_parameters(args.parameters, default_fit_low_res_parameters)
+
+	if parameters['verbose']:
+		print("Training Chroms: ", parameters['training_chroms'])
+		print("Vaidation Chroms: ", parameters['validation_chroms'])
+		print("\nLoading peaks from: ", parameters['loci'])
+		print("Loading negatives from: ", parameters['negatives'], "\n")
+
+	training_data = PeakGenerator(
+		peaks=parameters['loci'],
+		negatives=parameters['negatives'],
+		sequences=parameters['sequences'],
+		signals=parameters['signals'],
+		controls=parameters['controls'],
+		chroms=parameters['training_chroms'],
+		in_window=parameters['in_window'],
+		out_window=parameters['out_window'],
+		max_jitter=parameters['max_jitter'],
+		negative_ratio=parameters['negative_ratio'],
+		reverse_complement=parameters['reverse_complement'],
+		min_counts=parameters['min_counts'],
+		max_counts=parameters['max_counts'],
+		summits=parameters['summits'],
+		exclusion_lists=parameters['exclusion_lists'],
+		random_state=parameters['random_state'],
+		batch_size=parameters['batch_size'],
+		verbose=parameters['verbose']
+	)
+
+	valid_data = extract_loci(
+		sequences=parameters['sequences'],
+		signals=parameters['signals'],
+		in_signals=parameters['controls'],
+		loci=parameters['loci'],
+		chroms=parameters['validation_chroms'],
+		in_window=parameters['in_window'],
+		out_window=parameters['out_window'],
+		max_jitter=0,
+		exclusion_lists=parameters['exclusion_lists'],
+		ignore=list('QWERYUIOPSDFHJKLZXVBNM'),
+		verbose=parameters['verbose']
+	)
+
+	if parameters['verbose']:
+		print("\nTraining Set Peaks: ", training_data.dataset.peak_sequences.shape[0])
+		print("Training Set Negatives: ", training_data.dataset.negative_sequences.shape[0])
+		print("Validation Set Size: ", valid_data[0].shape[0], "\n")
+
+	if parameters['controls'] is not None:
+		valid_sequences, valid_signals, valid_controls = valid_data
+		n_control_tracks = len(parameters['controls'])
+	else:
+		valid_sequences, valid_signals = valid_data
+		valid_controls = None
+		n_control_tracks = 0
+
+	trimming = (parameters['in_window'] - parameters['out_window']) // 2
+
+	model = BPNetWithCoarseMNLL(
+		n_filters=parameters['n_filters'],
+		n_layers=parameters['n_layers'],
+		n_outputs=len(parameters['signals']),
+		n_control_tracks=n_control_tracks,
+		profile_output_bias=parameters['profile_output_bias'],
+		count_output_bias=parameters['count_output_bias'],
+		trimming=trimming,
+		name=parameters['name'],
+		verbose=parameters['verbose'],
+		coarse_bin_size=parameters['coarse_bin_size'],
+	).to(parameters['device'])
+
+	optimizer = torch.optim.Adam(model.parameters(), lr=parameters['lr'])
+
+	if parameters['scheduler']:
+		scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5,
+			patience=5, threshold=0.0001, min_lr=0.0001)
+	else:
+		scheduler = None
+
+	model.fit(training_data, optimizer, scheduler,
+		X_valid=valid_sequences,
+		X_ctl_valid=valid_controls, y_valid=valid_signals,
+		max_epochs=parameters['max_epochs'],
+		batch_size=parameters['batch_size'],
+		early_stopping=parameters['early_stopping'],
+		dtype=parameters['dtype'],
+		device=parameters['device'])
+
+	evaluate_parameters = parameters.copy()
+	evaluate_parameters['chroms'] = parameters['validation_chroms']
+	evaluate_parameters['max_jitter'] = 0
+	evaluate_parameters['reverse_complement'] = False
+	evaluate_parameters['model'] = parameters['name'] + '.torch'
+	evaluate_parameters['performance_filename'] = (parameters['name'] +
+		'.performance.tsv')
+
+	fname = "{}.evaluate.json".format(parameters['name'])
+	with open(fname, "w") as outfile:
+		outfile.write(json.dumps(evaluate_parameters, sort_keys=True, indent=4))
+
 	os.system("bpnet evaluate -p {}".format(fname))
 
 
